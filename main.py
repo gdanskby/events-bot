@@ -8,7 +8,7 @@ CHAT_ID = os.environ["CHAT_ID"]
 
 bot = Bot(token=BOT_TOKEN)
 
-URL = "https://www.trojmiasto.pl/imprezy/kalendarz-imprez/"
+URL = "https://www.trojmiasto.pl/imprezy/wstepwolny,1_5.html"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0"
@@ -20,31 +20,29 @@ def get_events():
 
     events = []
 
-    # ищем все возможные карточки событий
-    cards = soup.select("article, .event, .impreza, .box, li")
+    # ищем ссылки на события (самый стабильный способ для этого сайта)
+    cards = soup.select("a[href*='/imprezy/']")
 
     for c in cards:
-        text = c.get_text(" ", strip=True).lower()
+        title = c.get_text(strip=True)
 
-        # фильтр: только бесплатные
-        if "wstęp wolny" not in text and "bezpłat" not in text:
+        # ❌ убираем мусор
+        if not title or len(title) < 5:
+            continue
+        if "wstepwolny" in title.lower():
             continue
 
-        title_tag = c.find(["h2", "h3"])
-        title = title_tag.get_text(strip=True) if title_tag else "Bez tytułu"
+        href = c.get("href")
+        if not href:
+            continue
 
-        link_tag = c.find("a")
-        url = None
-        if link_tag and link_tag.get("href"):
-            href = link_tag["href"]
-            url = href if href.startswith("http") else "https://www.trojmiasto.pl" + href
+        url = href if href.startswith("http") else "https://www.trojmiasto.pl" + href
 
+        # картинка (если есть)
         img_tag = c.find("img")
-        img = None
-        if img_tag:
-            img = img_tag.get("src") or img_tag.get("data-src")
+        img = img_tag.get("src") if img_tag else None
 
-        address = "📍 Trójmiasto"
+        address = "Trójmiasto"
 
         events.append({
             "title": title,
@@ -53,7 +51,17 @@ def get_events():
             "address": address
         })
 
-    return events
+    # убираем дубликаты
+    unique = []
+    seen = set()
+
+    for e in events:
+        if e["url"] in seen:
+            continue
+        seen.add(e["url"])
+        unique.append(e)
+
+    return unique
 
 
 def send():
@@ -63,7 +71,7 @@ def send():
         bot.send_message(CHAT_ID, "Сегодня бесплатных мероприятий не найдено")
         return
 
-    for e in events[:10]:
+    for e in events[:5]:
         text = f"""🎉 {e['title']}
 
 📍 {e['address']}
