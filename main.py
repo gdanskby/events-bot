@@ -14,15 +14,85 @@ URL = "https://www.trojmiasto.pl/imprezy/wstepwolny,1.html"
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 
+# -----------------------
+# ФИЛЬТР БЕСПЛАТНЫХ
+# -----------------------
+def is_free_event(text, url):
+    text = (text or "").lower()
+    url = (url or "").lower()
+
+    keywords = [
+        "wstęp wolny",
+        "wstep wolny",
+        "bezpłatny",
+        "bezplatny",
+        "free"
+    ]
+
+    if any(k in text for k in keywords):
+        return True
+
+    if "wstepwolny" in url:
+        return True
+
+    return False
+
+
+# -----------------------
+# ТОЛЬКО ЗАВТРА
+# -----------------------
 def is_tomorrow(date_str):
     try:
-        event_date = datetime.fromisoformat(date_str[:10])
+        dt = datetime.fromisoformat(date_str[:10])
         tomorrow = datetime.now().date() + timedelta(days=1)
-        return event_date.date() == tomorrow
+        return dt.date() == tomorrow
     except:
         return False
 
 
+# -----------------------
+# ДАТА В ТЕКСТ
+# -----------------------
+def format_date(date_str):
+    try:
+        dt = datetime.fromisoformat(date_str[:10])
+
+        days = ["понедельник","вторник","среда","четверг","пятница","суббота","воскресенье"]
+        months = ["","января","февраля","марта","апреля","мая","июня",
+                  "июля","августа","сентября","октября","ноября","декабря"]
+
+        return f"{dt.day} {months[dt.month]} ({days[dt.weekday()]})"
+    except:
+        return ""
+
+
+# -----------------------
+# ПЕРЕВОД НАЗВАНИЯ (простое)
+# -----------------------
+def translate_title(text):
+    if not text:
+        return ""
+
+    replacements = {
+        "Koncert": "Концерт",
+        "koncert": "концерт",
+        "Wystawa": "Выставка",
+        "wystawa": "выставка",
+        "Festiwal": "Фестиваль",
+        "festiwal": "фестиваль",
+        "Dla dzieci": "Для детей",
+        "Impreza": "Мероприятие",
+    }
+
+    for k, v in replacements.items():
+        text = text.replace(k, v)
+
+    return text
+
+
+# -----------------------
+# ПОЛУЧЕНИЕ ССЫЛОК
+# -----------------------
 def get_links():
     r = requests.get(URL, headers=HEADERS, timeout=30)
     soup = BeautifulSoup(r.text, "html.parser")
@@ -39,6 +109,9 @@ def get_links():
     return list(links)[:15]
 
 
+# -----------------------
+# ПАРСИНГ СОБЫТИЯ
+# -----------------------
 def parse_event(url):
     r = requests.get(url, headers=HEADERS, timeout=30)
     soup = BeautifulSoup(r.text, "html.parser")
@@ -56,12 +129,20 @@ def parse_event(url):
                 continue
 
             start = data.get("startDate")
+            if not start:
+                continue
 
-            # ❗ ФИЛЬТР ЗАВТРА
-            if not start or not is_tomorrow(start):
+            # ❗ только завтра
+            if not is_tomorrow(start):
                 return None
 
-            title = data.get("name")
+            # ❗ фильтр бесплатных
+            raw_text = json.dumps(data, ensure_ascii=False)
+
+            if not is_free_event(raw_text, url):
+                return None
+
+            title = translate_title(data.get("name"))
             image = data.get("image")
 
             loc = data.get("location", {})
@@ -74,13 +155,10 @@ def parse_event(url):
                     city = addr.get("addressLocality", "")
                     address = f"{street}, {city}".strip(", ")
 
-            time = start[11:16] if "T" in start else ""
-
             return {
                 "title": title,
                 "image": image,
-                "time": time,
-                "date": start[:10],
+                "date": start,
                 "address": address or "Trójmiasto",
                 "url": url
             }
@@ -91,6 +169,9 @@ def parse_event(url):
     return None
 
 
+# -----------------------
+# ОТПРАВКА
+# -----------------------
 def send():
     sent = 0
 
@@ -100,9 +181,11 @@ def send():
         if not e:
             continue
 
+        date_text = format_date(e["date"])
+
         text = f"""🎉 {e['title']}
 
-⌛ {e['time']}
+📅 {date_text}
 📍 {e['address']}
 
 🔗 {e['url']}"""
