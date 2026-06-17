@@ -8,72 +8,73 @@ CHAT_ID = os.environ["CHAT_ID"]
 
 bot = Bot(token=BOT_TOKEN)
 
-URL = "https://www.trojmiasto.pl/imprezy/wstepwolny,1_5.html"
+BASE = "https://www.trojmiasto.pl"
+START = "https://www.trojmiasto.pl/imprezy/wstepwolny,1.html"
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0"
-}
+HEADERS = {"User-Agent": "Mozilla/5.0"}
 
-def get_events():
-    r = requests.get(URL, headers=HEADERS, timeout=30)
+
+def get_links():
+    r = requests.get(START, headers=HEADERS, timeout=30)
     soup = BeautifulSoup(r.text, "html.parser")
 
-    events = []
+    links = set()
 
-    # ищем ссылки на события (самый стабильный способ для этого сайта)
-    cards = soup.select("a[href*='/imprezy/']")
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
 
-    for c in cards:
-        title = c.get_text(strip=True)
+        # 🔥 ТОЛЬКО реальные события (есть запятая в URL)
+        if "/imprezy/" in href and "," in href:
+            full = href if href.startswith("http") else BASE + href
+            links.add(full)
 
-        # ❌ убираем мусор
-        if not title or len(title) < 5:
-            continue
-        if "wstepwolny" in title.lower():
-            continue
+    return list(links)[:8]
 
-        href = c.get("href")
-        if not href:
-            continue
 
-        url = href if href.startswith("http") else "https://www.trojmiasto.pl" + href
+def parse(url):
+    r = requests.get(url, headers=HEADERS, timeout=30)
+    soup = BeautifulSoup(r.text, "html.parser")
 
-        # картинка (если есть)
-        img_tag = c.find("img")
-        img = img_tag.get("src") if img_tag else None
+    title = soup.find("h1")
+    title = title.get_text(strip=True) if title else None
 
-        address = "Trójmiasto"
+    # 🖼 самая стабильная картинка
+    img = soup.find("meta", property="og:image")
+    img = img["content"] if img else None
 
-        events.append({
-            "title": title,
-            "url": url,
-            "img": img,
-            "address": address
-        })
+    # 📍 адрес через карту
+    address = None
+    for a in soup.find_all("a", href=True):
+        if "map" in a["href"] or "google" in a["href"]:
+            address = a.get_text(strip=True)
+            break
 
-    # убираем дубликаты
-    unique = []
-    seen = set()
+    # ⏰ время (очень грубо, но работает часто)
+    time = None
+    for t in soup.find_all(text=True):
+        if ":" in t and any(x in t for x in ["18", "19", "20"]):
+            time = t.strip()
+            break
 
-    for e in events:
-        if e["url"] in seen:
-            continue
-        seen.add(e["url"])
-        unique.append(e)
-
-    return unique
+    return {
+        "title": title,
+        "img": img,
+        "address": address or "Trójmiasto",
+        "time": time or "",
+        "url": url
+    }
 
 
 def send():
-    events = get_events()
+    for url in get_links():
+        e = parse(url)
 
-    if not events:
-        bot.send_message(CHAT_ID, "Сегодня бесплатных мероприятий не найдено")
-        return
+        if not e["title"]:
+            continue
 
-    for e in events[:5]:
         text = f"""🎉 {e['title']}
 
+⌛ {e['time']}
 📍 {e['address']}
 
 🔗 {e['url']}"""
@@ -89,3 +90,4 @@ def send():
 
 if __name__ == "__main__":
     send()
+    
