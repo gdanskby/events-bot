@@ -1,6 +1,7 @@
 import os
 import requests
 import json
+from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 from telegram import Bot
 
@@ -10,11 +11,19 @@ CHAT_ID = os.environ["CHAT_ID"]
 bot = Bot(token=BOT_TOKEN)
 
 URL = "https://www.trojmiasto.pl/imprezy/wstepwolny,1.html"
-
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 
-def get_event_pages():
+def is_tomorrow(date_str):
+    try:
+        event_date = datetime.fromisoformat(date_str[:10])
+        tomorrow = datetime.now().date() + timedelta(days=1)
+        return event_date.date() == tomorrow
+    except:
+        return False
+
+
+def get_links():
     r = requests.get(URL, headers=HEADERS, timeout=30)
     soup = BeautifulSoup(r.text, "html.parser")
 
@@ -23,15 +32,14 @@ def get_event_pages():
     for a in soup.find_all("a", href=True):
         href = a["href"]
 
-        # берём только реальные страницы событий
-        if "imp" in href and "imprezy" in href:
+        if "/imprezy/" in href and "," in href:
             full = href if href.startswith("http") else "https://www.trojmiasto.pl" + href
             links.add(full)
 
-    return list(links)[:10]
+    return list(links)[:15]
 
 
-def extract_event_data(url):
+def parse_event(url):
     r = requests.get(url, headers=HEADERS, timeout=30)
     soup = BeautifulSoup(r.text, "html.parser")
 
@@ -41,16 +49,20 @@ def extract_event_data(url):
         try:
             data = json.loads(s.string)
 
-            # иногда список
             if isinstance(data, list):
                 data = data[0]
 
             if data.get("@type") != "Event":
                 continue
 
+            start = data.get("startDate")
+
+            # ❗ ФИЛЬТР ЗАВТРА
+            if not start or not is_tomorrow(start):
+                return None
+
             title = data.get("name")
             image = data.get("image")
-            start = data.get("startDate")
 
             loc = data.get("location", {})
             address = ""
@@ -62,10 +74,13 @@ def extract_event_data(url):
                     city = addr.get("addressLocality", "")
                     address = f"{street}, {city}".strip(", ")
 
+            time = start[11:16] if "T" in start else ""
+
             return {
                 "title": title,
                 "image": image,
-                "date": start,
+                "time": time,
+                "date": start[:10],
                 "address": address or "Trójmiasto",
                 "url": url
             }
@@ -77,15 +92,17 @@ def extract_event_data(url):
 
 
 def send():
-    for url in get_event_pages():
-        e = extract_event_data(url)
+    sent = 0
 
-        if not e or not e["title"]:
+    for url in get_links():
+        e = parse_event(url)
+
+        if not e:
             continue
 
         text = f"""🎉 {e['title']}
 
-📅 {e['date']}
+⌛ {e['time']}
 📍 {e['address']}
 
 🔗 {e['url']}"""
@@ -97,6 +114,11 @@ def send():
                 bot.send_message(CHAT_ID, text)
         except:
             bot.send_message(CHAT_ID, text)
+
+        sent += 1
+
+    if sent == 0:
+        bot.send_message(CHAT_ID, "Завтра бесплатных мероприятий не найдено")
 
 
 if __name__ == "__main__":
