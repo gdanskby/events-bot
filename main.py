@@ -1,5 +1,6 @@
 import os
 import requests
+import json
 from bs4 import BeautifulSoup
 from telegram import Bot
 
@@ -8,14 +9,13 @@ CHAT_ID = os.environ["CHAT_ID"]
 
 bot = Bot(token=BOT_TOKEN)
 
-BASE = "https://www.trojmiasto.pl"
-START = "https://www.trojmiasto.pl/imprezy/wstepwolny,1.html"
+URL = "https://www.trojmiasto.pl/imprezy/wstepwolny,1.html"
 
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 
-def get_links():
-    r = requests.get(START, headers=HEADERS, timeout=30)
+def get_event_pages():
+    r = requests.get(URL, headers=HEADERS, timeout=30)
     soup = BeautifulSoup(r.text, "html.parser")
 
     links = set()
@@ -23,65 +23,76 @@ def get_links():
     for a in soup.find_all("a", href=True):
         href = a["href"]
 
-        # 🔥 ТОЛЬКО реальные события (есть запятая в URL)
-        if "/imprezy/" in href and "," in href:
-            full = href if href.startswith("http") else BASE + href
+        # берём только реальные страницы событий
+        if "imp" in href and "imprezy" in href:
+            full = href if href.startswith("http") else "https://www.trojmiasto.pl" + href
             links.add(full)
 
-    return list(links)[:8]
+    return list(links)[:10]
 
 
-def parse(url):
+def extract_event_data(url):
     r = requests.get(url, headers=HEADERS, timeout=30)
     soup = BeautifulSoup(r.text, "html.parser")
 
-    title = soup.find("h1")
-    title = title.get_text(strip=True) if title else None
+    scripts = soup.find_all("script", type="application/ld+json")
 
-    # 🖼 самая стабильная картинка
-    img = soup.find("meta", property="og:image")
-    img = img["content"] if img else None
+    for s in scripts:
+        try:
+            data = json.loads(s.string)
 
-    # 📍 адрес через карту
-    address = None
-    for a in soup.find_all("a", href=True):
-        if "map" in a["href"] or "google" in a["href"]:
-            address = a.get_text(strip=True)
-            break
+            # иногда список
+            if isinstance(data, list):
+                data = data[0]
 
-    # ⏰ время (очень грубо, но работает часто)
-    time = None
-    for t in soup.find_all(text=True):
-        if ":" in t and any(x in t for x in ["18", "19", "20"]):
-            time = t.strip()
-            break
+            if data.get("@type") != "Event":
+                continue
 
-    return {
-        "title": title,
-        "img": img,
-        "address": address or "Trójmiasto",
-        "time": time or "",
-        "url": url
-    }
+            title = data.get("name")
+            image = data.get("image")
+            start = data.get("startDate")
+
+            loc = data.get("location", {})
+            address = ""
+
+            if isinstance(loc, dict):
+                addr = loc.get("address", {})
+                if isinstance(addr, dict):
+                    street = addr.get("streetAddress", "")
+                    city = addr.get("addressLocality", "")
+                    address = f"{street}, {city}".strip(", ")
+
+            return {
+                "title": title,
+                "image": image,
+                "date": start,
+                "address": address or "Trójmiasto",
+                "url": url
+            }
+
+        except:
+            continue
+
+    return None
 
 
 def send():
-    for url in get_links():
-        e = parse(url)
+    for url in get_event_pages():
+        e = extract_event_data(url)
 
-        if not e["title"]:
+        if not e or not e["title"]:
             continue
 
         text = f"""🎉 {e['title']}
 
-⌛ {e['time']}
+📅 {e['date']}
 📍 {e['address']}
 
 🔗 {e['url']}"""
 
         try:
-            if e["img"]:
-                bot.send_photo(CHAT_ID, photo=e["img"], caption=text)
+            if e["image"]:
+                bot.send_photo(CHAT_ID, photo=e["image"], caption=text)
             else:
                 bot.send_message(CHAT_ID, text)
         except:
@@ -90,4 +101,3 @@ def send():
 
 if __name__ == "__main__":
     send()
-    
