@@ -1,6 +1,7 @@
 import os
 import requests
 import json
+import re
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 from telegram import Bot
@@ -14,24 +15,79 @@ HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 
 # -----------------------
-# ЗАВТРАШНЯЯ ДАТА
+# ЗАВТРА
 # -----------------------
-def get_tomorrow():
+def tomorrow_str():
     return (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
 
 
+def is_tomorrow(date_str):
+    try:
+        return datetime.strptime(date_str, "%Y-%m-%d").date() == (
+            datetime.now().date() + timedelta(days=1)
+        )
+    except:
+        return False
+
+
 # -----------------------
-# ССЫЛКА НА ДЕНЬ + FREE
+# ВЫТАСКИВАЕМ ДАТУ ИЗ ТЕКСТА
+# -----------------------
+def extract_date(text):
+    if not text:
+        return None
+
+    match = re.search(r"\d{4}-\d{2}-\d{2}", text)
+    if match:
+        return match.group(0)
+
+    return None
+
+
+# -----------------------
+# БЕСПЛАТНЫЕ
+# -----------------------
+def is_free_event(text, url):
+    text = (text or "").lower()
+    url = (url or "").lower()
+
+    return (
+        "wstęp wolny" in text
+        or "wstep wolny" in text
+        or "bezpłatny" in text
+        or "bezplatny" in text
+        or "wstepwolny" in url
+    )
+
+
+# -----------------------
+# КРАСИВАЯ ДАТА
+# -----------------------
+def format_date(date_str):
+    try:
+        dt = datetime.strptime(date_str, "%Y-%m-%d")
+
+        days = ["понедельник","вторник","среда","четверг","пятница","суббота","воскресенье"]
+        months = ["","января","февраля","марта","апреля","мая","июня",
+                  "июля","августа","сентября","октября","ноября","декабря"]
+
+        return f"{dt.day} {months[dt.month]} ({days[dt.weekday()]})"
+    except:
+        return ""
+
+
+# -----------------------
+# ССЫЛКА НА ДЕНЬ
 # -----------------------
 def build_url():
-    date = get_tomorrow()
-    return f"https://m.trojmiasto.pl/imprezy/dzien,{date},wstepwolny,1_5,o0,1.html"
+    d = tomorrow_str()
+    return f"https://m.trojmiasto.pl/imprezy/dzien,{d},wstepwolny,1_5,o0,1.html"
 
 
 # -----------------------
-# ПОЛУЧАЕМ ССЫЛКИ СОБЫТИЙ
+# ССЫЛКИ СОБЫТИЙ
 # -----------------------
-def get_event_links(url):
+def get_links(url):
     r = requests.get(url, headers=HEADERS, timeout=30)
     soup = BeautifulSoup(r.text, "html.parser")
 
@@ -48,7 +104,7 @@ def get_event_links(url):
 
 
 # -----------------------
-# ПАРСИНГ СОБЫТИЯ (JSON-LD)
+# ПАРСИНГ СОБЫТИЯ
 # -----------------------
 def parse_event(url):
     r = requests.get(url, headers=HEADERS, timeout=30)
@@ -66,24 +122,37 @@ def parse_event(url):
             if data.get("@type") != "Event":
                 continue
 
+            raw = json.dumps(data, ensure_ascii=False)
+
+            # ❗ бесплатное
+            if not is_free_event(raw, url):
+                return None
+
             title = data.get("name")
             image = data.get("image")
-            start = data.get("startDate")
 
-            if not title or not start:
-                continue
+            # дата
+            start = data.get("startDate") or raw
+            date_only = extract_date(start)
+
+            if not date_only:
+                return None
+
+            # ❗ только завтра
+            if not is_tomorrow(date_only):
+                return None
 
             # время
             time = ""
             try:
-                time = start.split("T")[1][:5]
+                time = data.get("startDate", "").split("T")[1][:5]
             except:
                 pass
 
             # адрес
             address = "Trójmiasto"
-
             loc = data.get("location", {})
+
             if isinstance(loc, dict):
                 addr = loc.get("address", {})
                 if isinstance(addr, dict):
@@ -95,6 +164,7 @@ def parse_event(url):
                 "title": title,
                 "image": image,
                 "time": time,
+                "date": date_only,
                 "address": address,
                 "url": url
             }
@@ -106,11 +176,11 @@ def parse_event(url):
 
 
 # -----------------------
-# ОТПРАВКА ОДНОЙ АФИШИ
+# ОТПРАВКА АФИШИ
 # -----------------------
 def send():
     url = build_url()
-    links = get_event_links(url)
+    links = get_links(url)
 
     events = []
     seen = set()
@@ -118,7 +188,6 @@ def send():
     for link in links:
         if link in seen:
             continue
-
         seen.add(link)
 
         e = parse_event(link)
@@ -131,8 +200,7 @@ def send():
         bot.send_message(CHAT_ID, "На завтра бесплатных мероприятий не найдено")
         return
 
-    # -------- афиша --------
-    text = f"🎉 Бесплатные мероприятия на {get_tomorrow()}\n\n"
+    text = f"🎉 Бесплатные мероприятия на {format_date(tomorrow_str())}\n\n"
 
     for i, e in enumerate(events[:10], 1):
         text += f"""{i}) 🎉 {e['title']}
@@ -142,11 +210,9 @@ def send():
 
 """
 
-    # отправляем фото первого события (если есть)
     try:
-        first = events[0]
-        if first["image"]:
-            bot.send_photo(CHAT_ID, photo=first["image"], caption=text)
+        if events[0]["image"]:
+            bot.send_photo(CHAT_ID, photo=events[0]["image"], caption=text)
         else:
             bot.send_message(CHAT_ID, text)
     except:
