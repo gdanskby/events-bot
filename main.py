@@ -21,11 +21,41 @@ def tomorrow():
     return (datetime.now() + timedelta(days=1)).date()
 
 
+def tomorrow_str():
+    return (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+
+
+# -----------------------
+# ПЕРЕВОД НАЗВАНИЯ
+# -----------------------
+def translate(text):
+    if not text:
+        return ""
+
+    rules = {
+        "Koncert": "Концерт",
+        "koncert": "концерт",
+        "Festiwal": "Фестиваль",
+        "festiwal": "фестиваль",
+        "Wystawa": "Выставка",
+        "wystawa": "выставка",
+        "Spektakl": "Спектакль",
+        "Teatr": "Театр",
+        "dla dzieci": "для детей",
+        "Impreza": "Мероприятие",
+    }
+
+    for k, v in rules.items():
+        text = text.replace(k, v)
+
+    return text
+
+
 # -----------------------
 # ИСТОЧНИКИ
 # -----------------------
 def sources():
-    d = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+    d = tomorrow_str()
 
     return [
         f"https://m.trojmiasto.pl/imprezy/dzien,{d},wstepwolny,1_5,o0,1.html",
@@ -45,6 +75,7 @@ def get_links(url):
 
         for a in soup.find_all("a", href=True):
             href = a["href"]
+
             if "imprezy" in href:
                 full = href if href.startswith("http") else "https://m.trojmiasto.pl" + href
                 links.add(full)
@@ -55,7 +86,7 @@ def get_links(url):
 
 
 # -----------------------
-# ПРОВЕРКА БЕСПЛАТНОСТИ (HTML fallback)
+# БЕСПЛАТНЫЕ
 # -----------------------
 def is_free(text):
     t = (text or "").lower()
@@ -63,21 +94,21 @@ def is_free(text):
 
 
 # -----------------------
-# ИЗВЛЕЧЕНИЕ ДАТЫ ЛЮБЫМ СПОСОБОМ
+# ДАТА ИЗ ТЕКСТА
 # -----------------------
 def extract_date(text):
     if not text:
         return None
 
-    match = re.search(r"\d{4}-\d{2}-\d{2}", text)
-    if match:
-        return datetime.strptime(match.group(0), "%Y-%m-%d").date()
+    m = re.search(r"\d{4}-\d{2}-\d{2}", text)
+    if m:
+        return datetime.strptime(m.group(0), "%Y-%m-%d").date()
 
     return None
 
 
 # -----------------------
-# ПАРСИНГ СОБЫТИЯ
+# ПАРСИНГ
 # -----------------------
 def parse(url):
     try:
@@ -86,11 +117,10 @@ def parse(url):
 
         text_all = soup.get_text(" ", strip=True)
 
-        # ❗ бесплатность (fallback HTML)
+        # ❗ фильтр бесплатных
         if not is_free(text_all):
             return None
 
-        # JSON-LD попытка
         title = None
         image = None
         date = None
@@ -124,15 +154,7 @@ def parse(url):
             except:
                 continue
 
-        # fallback title
-        if not title:
-            h1 = soup.find("h1")
-            title = h1.text.strip() if h1 else None
-
-        if not title:
-            return None
-
-        if not date:
+        if not title or not date:
             return None
 
         # ❗ только завтра
@@ -140,7 +162,7 @@ def parse(url):
             return None
 
         return {
-            "title": title,
+            "title": translate(title),
             "image": image,
             "address": address,
             "url": url
