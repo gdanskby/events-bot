@@ -17,7 +17,7 @@ HEADERS = {"User-Agent": "Mozilla/5.0"}
 # -----------------------
 # ДАТА
 # -----------------------
-def tomorrow():
+def tomorrow_date():
     return (datetime.now() + timedelta(days=1)).date()
 
 
@@ -26,7 +26,7 @@ def tomorrow_str():
 
 
 # -----------------------
-# РЕАЛЬНЫЙ ПЕРЕВОД (без ключей)
+# ПЕРЕВОД (оставляем, он норм)
 # -----------------------
 def translate(text):
     try:
@@ -38,12 +38,9 @@ def translate(text):
             "dt": "t",
             "q": text
         }
-
         r = requests.get(url, params=params, timeout=10)
         data = r.json()
-
         return "".join([x[0] for x in data[0]])
-
     except:
         return text
 
@@ -104,24 +101,7 @@ def extract_date(text):
 
 
 # -----------------------
-# КАРТИНКА (УЛУЧШЕННО)
-# -----------------------
-def get_image(soup):
-    # 1. og:image (самый важный)
-    og = soup.find("meta", property="og:image")
-    if og and og.get("content"):
-        return og["content"]
-
-    # 2. обычные img
-    img = soup.find("img")
-    if img and img.get("src"):
-        return img["src"]
-
-    return None
-
-
-# -----------------------
-# ПАРСИНГ
+# ПАРСИНГ (УПРОЩЁННЫЙ = СТАБИЛЬНЫЙ)
 # -----------------------
 def parse(url):
     try:
@@ -130,13 +110,18 @@ def parse(url):
 
         text_all = soup.get_text(" ", strip=True)
 
+        # ❗ только бесплатные
         if not is_free(text_all):
             return None
 
-        title = None
-        image = get_image(soup)
+        title = soup.find("h1")
+        title = title.text.strip() if title else None
+
+        if not title:
+            return None
+
+        # ищем дату в JSON-LD
         date = None
-        address = "Trójmiasto"
 
         scripts = soup.find_all("script", type="application/ld+json")
 
@@ -147,33 +132,38 @@ def parse(url):
                 if isinstance(data, list):
                     data = data[0]
 
-                if isinstance(data, dict) and data.get("@type") == "Event":
-                    title = data.get("name")
-
+                if isinstance(data, dict):
                     start = data.get("startDate")
                     if start:
                         date = extract_date(start)
 
-                    loc = data.get("location", {})
-                    if isinstance(loc, dict):
-                        addr = loc.get("address", {})
-                        if isinstance(addr, dict):
-                            street = addr.get("streetAddress", "")
-                            city = addr.get("addressLocality", "")
-                            address = f"{street}, {city}".strip(", ")
-
             except:
                 continue
 
-        if not title or not date:
+        if not date:
+            # fallback — ищем в тексте страницы
+            date = extract_date(text_all)
+
+        if not date:
             return None
 
-        if date != tomorrow():
+        # ❗ только завтра
+        if date != tomorrow_date():
             return None
+
+        # адрес (просто текстом)
+        address = "Trójmiasto"
+
+        loc = soup.get_text(" ", strip=True)
+        if "Sopot" in loc:
+            address = "Sopot"
+        elif "Gdańsk" in loc:
+            address = "Gdańsk"
+        elif "Gdynia" in loc:
+            address = "Gdynia"
 
         return {
             "title": translate(title),
-            "image": image,
             "address": address,
             "url": url
         }
@@ -209,23 +199,14 @@ def send():
 
     text = "🎉 Бесплатные мероприятия на завтра\n\n"
 
-    for i, e in enumerate(events[:10], 1):
+    for i, e in enumerate(events[:15], 1):
         text += f"""{i}) 🎉 {e['title']}
 📍 {e['address']}
 🔗 {e['url']}
 
 """
 
-    # -----------------------
-    # ОТПРАВКА С КАРТИНКОЙ
-    # -----------------------
-    try:
-        if events[0]["image"]:
-            bot.send_photo(CHAT_ID, photo=events[0]["image"], caption=text[:1020])
-        else:
-            bot.send_message(CHAT_ID, text)
-    except:
-        bot.send_message(CHAT_ID, text)
+    bot.send_message(CHAT_ID, text)
 
 
 if __name__ == "__main__":
