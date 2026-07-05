@@ -15,7 +15,7 @@ HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 
 # -----------------------
-# ЗАВТРА
+# ДАТА
 # -----------------------
 def tomorrow():
     return (datetime.now() + timedelta(days=1)).date()
@@ -26,29 +26,26 @@ def tomorrow_str():
 
 
 # -----------------------
-# ПЕРЕВОД НАЗВАНИЯ
+# РЕАЛЬНЫЙ ПЕРЕВОД (без ключей)
 # -----------------------
 def translate(text):
-    if not text:
-        return ""
+    try:
+        url = "https://translate.googleapis.com/translate_a/single"
+        params = {
+            "client": "gtx",
+            "sl": "pl",
+            "tl": "ru",
+            "dt": "t",
+            "q": text
+        }
 
-    rules = {
-        "Koncert": "Концерт",
-        "koncert": "концерт",
-        "Festiwal": "Фестиваль",
-        "festiwal": "фестиваль",
-        "Wystawa": "Выставка",
-        "wystawa": "выставка",
-        "Spektakl": "Спектакль",
-        "Teatr": "Театр",
-        "dla dzieci": "для детей",
-        "Impreza": "Мероприятие",
-    }
+        r = requests.get(url, params=params, timeout=10)
+        data = r.json()
 
-    for k, v in rules.items():
-        text = text.replace(k, v)
+        return "".join([x[0] for x in data[0]])
 
-    return text
+    except:
+        return text
 
 
 # -----------------------
@@ -56,7 +53,6 @@ def translate(text):
 # -----------------------
 def sources():
     d = tomorrow_str()
-
     return [
         f"https://m.trojmiasto.pl/imprezy/dzien,{d},wstepwolny,1_5,o0,1.html",
         "https://m.trojmiasto.pl/imprezy/wstepwolny,1_5,o0,1.html"
@@ -94,7 +90,7 @@ def is_free(text):
 
 
 # -----------------------
-# ДАТА ИЗ ТЕКСТА
+# ДАТА
 # -----------------------
 def extract_date(text):
     if not text:
@@ -103,6 +99,23 @@ def extract_date(text):
     m = re.search(r"\d{4}-\d{2}-\d{2}", text)
     if m:
         return datetime.strptime(m.group(0), "%Y-%m-%d").date()
+
+    return None
+
+
+# -----------------------
+# КАРТИНКА (УЛУЧШЕННО)
+# -----------------------
+def get_image(soup):
+    # 1. og:image (самый важный)
+    og = soup.find("meta", property="og:image")
+    if og and og.get("content"):
+        return og["content"]
+
+    # 2. обычные img
+    img = soup.find("img")
+    if img and img.get("src"):
+        return img["src"]
 
     return None
 
@@ -117,12 +130,11 @@ def parse(url):
 
         text_all = soup.get_text(" ", strip=True)
 
-        # ❗ фильтр бесплатных
         if not is_free(text_all):
             return None
 
         title = None
-        image = None
+        image = get_image(soup)
         date = None
         address = "Trójmiasto"
 
@@ -137,7 +149,6 @@ def parse(url):
 
                 if isinstance(data, dict) and data.get("@type") == "Event":
                     title = data.get("name")
-                    image = data.get("image")
 
                     start = data.get("startDate")
                     if start:
@@ -157,7 +168,6 @@ def parse(url):
         if not title or not date:
             return None
 
-        # ❗ только завтра
         if date != tomorrow():
             return None
 
@@ -206,9 +216,12 @@ def send():
 
 """
 
+    # -----------------------
+    # ОТПРАВКА С КАРТИНКОЙ
+    # -----------------------
     try:
         if events[0]["image"]:
-            bot.send_photo(CHAT_ID, photo=events[0]["image"], caption=text)
+            bot.send_photo(CHAT_ID, photo=events[0]["image"], caption=text[:1020])
         else:
             bot.send_message(CHAT_ID, text)
     except:
